@@ -1,0 +1,50 @@
+name: Daily Hot News
+
+on:
+  schedule:
+    # Run at 00:00 UTC every day (8:00 AM Beijing Time)
+    - cron: '0 0 * * *'
+  workflow_dispatch: # Allow manual trigger
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '20'
+
+    - name: Install dependencies
+      run: npm install
+
+    - name: Fetch News
+      run: npm run fetch
+      env:
+        USER_AGENT: 'Mozilla/5.0 (GitHub Actions)'
+
+    - name: Generate Report
+      run: npm run generate
+      env:
+        GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+
+    - name: Commit and Push
+      run: |
+        git config --global user.name 'github-actions[bot]'
+        git config --global user.email 'github-actions[bot]@users.noreply.github.com'
+        
+        # Check if there are changes
+        if [[ -n $(git status -s) ]]; then
+          git add archives/ README.md
+          git commit -m "chore: update daily news $(date +'%Y-%m-%d')"
+          git push
+        else
+          echo "No changes to commit"
+        fi

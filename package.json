@@ -1,0 +1,20 @@
+{
+  "name": "daily-hot-news",
+  "version": "1.0.0",
+  "description": "Automated daily tech news briefer",
+  "main": "scripts/generate.js",
+  "scripts": {
+    "fetch": "node scripts/fetch_news.js",
+    "generate": "node scripts/generate.js",
+    "start": "npm run fetch && npm run generate"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "axios": "^1.6.0",
+    "cheerio": "^1.0.0-rc.12",
+    "rss-parser": "^3.13.0",
+    "@google/generative-ai": "^0.21.0"
+  }
+}
