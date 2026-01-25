@@ -102,6 +102,11 @@ function sanitizeForJSON(obj) {
 
 function safeJSONParse(jsonString, fallback = null) {
   try {
+    if (!jsonString || typeof jsonString !== 'string') {
+      console.warn("Invalid JSON string provided:", typeof jsonString);
+      return fallback;
+    }
+    
     const trimmed = jsonString.trim();
     if (!trimmed) {
       console.warn("Empty JSON string provided");
@@ -113,7 +118,7 @@ function safeJSONParse(jsonString, fallback = null) {
     console.error("JSON parse error:", error.message);
     console.error(
       "Problematic JSON (first 200 chars):",
-      jsonString.slice(0, 200),
+      jsonString ? jsonString.slice(0, 200) : 'undefined',
     );
     return fallback;
   }
@@ -205,7 +210,15 @@ async function processCategory(items, categoryName) {
             ${safeJSONStringify(inputData)}`;
 
       const result = await generateWithRetry(prompt);
-      const responseText = result.text;
+      const responseText = result?.text || result?.response?.text();
+      
+      if (!responseText) {
+        console.warn(`Empty response for ${categoryName} chunk, keeping original.`);
+        processedItems = processedItems.concat(chunk);
+        await delay(5000);
+        continue;
+      }
+      
       let chunkResult = safeJSONParse(responseText, []);
 
       if (!Array.isArray(chunkResult)) {
@@ -214,21 +227,22 @@ async function processCategory(items, categoryName) {
         else chunkResult = Object.values(chunkResult)[0];
       }
 
-      if (Array.isArray(chunkResult)) {
+      if (Array.isArray(chunkResult) && chunkResult.length > 0) {
         const mergedChunk = chunk.map((original, index) => {
-          if (chunkResult[index]) {
+          const translated = chunkResult[index];
+          if (translated && typeof translated === 'object') {
             return {
               ...original,
-              title: chunkResult[index].title || original.title,
-              desc: chunkResult[index].desc || original.desc,
-              comment: chunkResult[index].comment || "",
+              title: translated.title || original.title,
+              desc: translated.desc || original.desc || '',
+              comment: translated.comment || '',
             };
           }
           return original;
         });
         processedItems = processedItems.concat(mergedChunk);
       } else {
-        console.warn(`Batch failed for ${categoryName}, keeping original.`);
+        console.warn(`Invalid result format for ${categoryName}, keeping original.`);
         processedItems = processedItems.concat(chunk);
       }
 
