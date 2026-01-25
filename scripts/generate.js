@@ -3,13 +3,10 @@ const path = require('node:path');
 const { GoogleGenerativeAI } = require("@google/generative-ai");
 
 // Initialize Gemini
-// Use gemini-2.0-flash-exp or pro if available, otherwise fallback to 1.5-flash for speed/cost in batching
-// User requested 2.5pro, but for batching and "fun", 2.0-flash is often faster and sufficient.
-// However, let's stick to the requested high-quality model or a reliable one.
-// "gemini-2.0-flash" is great for high throughput. Let's try to use the one user set or default to a good one.
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+// Flash is faster and cheaper, good for batching.
 const model = genAI.getGenerativeModel({ 
-    model: "gemini-2.0-flash", // Switching to Flash for Batching Speed & Quota Safety
+    model: "gemini-2.0-flash", 
     generationConfig: { responseMimeType: "application/json" }
 });
 
@@ -22,17 +19,43 @@ function chunkArray(array, size) {
     return chunked;
 }
 
+// Helper: Delay
+const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
+
+// Helper: Retry wrapper with Exponential Backoff
+async function generateWithRetry(prompt, retries = 5) {
+    let attempt = 0;
+    let baseDelay = 10000; // Start with 10 seconds delay for 429
+
+    while (attempt < retries) {
+        try {
+            return await model.generateContent(prompt);
+        } catch (error) {
+            // Check for Rate Limit (429) or Overloaded (503)
+            if (error.message.includes('429') || error.message.includes('503')) {
+                attempt++;
+                if (attempt >= retries) throw error;
+                
+                const waitTime = baseDelay * Math.pow(2, attempt - 1); // 10s, 20s, 40s...
+                console.warn(`⚠️ Rate limited (429/503). Retrying in ${waitTime/1000}s (Attempt ${attempt}/${retries})...`);
+                await delay(waitTime);
+            } else {
+                throw error; // Non-retriable error
+            }
+        }
+    }
+}
+
 // Process a single category in batches
 async function processCategory(items, categoryName) {
     if (!items || items.length === 0) return [];
     
     console.log(`Processing ${categoryName} (${items.length} items)...`);
-    const chunks = chunkArray(items, 10); // Batch size 10 to fit in context and quota
+    const chunks = chunkArray(items, 10); // Batch size 10
     let processedItems = [];
 
     for (const chunk of chunks) {
         try {
-            // Simplify input for token saving
             const inputData = chunk.map(item => ({
                 title: item.title,
                 desc: item.desc || ""
@@ -51,11 +74,11 @@ async function processCategory(items, categoryName) {
             Input:
             ${JSON.stringify(inputData)}`;
 
-            const result = await model.generateContent(prompt);
+            // Use the retry wrapper
+            const result = await generateWithRetry(prompt);
             const responseText = result.response.text();
             let chunkResult = JSON.parse(responseText);
             
-            // Handle potential non-array return (Gemini quirk)
             if (!Array.isArray(chunkResult)) {
                 if (chunkResult.data) chunkResult = chunkResult.data;
                 else if (chunkResult.items) chunkResult = chunkResult.items;
@@ -63,7 +86,6 @@ async function processCategory(items, categoryName) {
             }
 
             if (Array.isArray(chunkResult)) {
-                // Merge back with original links
                 const mergedChunk = chunk.map((original, index) => {
                     if (chunkResult[index]) {
                         return {
@@ -81,12 +103,12 @@ async function processCategory(items, categoryName) {
                 processedItems = processedItems.concat(chunk);
             }
             
-            // Small delay to be nice to rate limits
-            await new Promise(r => setTimeout(r, 1000));
+            // Standard delay between successful chunks to be nice
+            await delay(5000); // 5s delay between chunks
 
         } catch (e) {
             console.error(`Error processing chunk for ${categoryName}:`, e.message);
-            processedItems = processedItems.concat(chunk); // Fallback to original
+            processedItems = processedItems.concat(chunk);
         }
     }
     return processedItems;
@@ -97,8 +119,6 @@ async function main() {
         const rawData = fs.readFileSync('news_data.json', 'utf8');
         const data = JSON.parse(rawData);
         
-        // Define categories to process
-        // We process ALL categories to ensure consistent "AI Comment" style
         const categories = [
             'hackernews', 'github', 'huggingface', 'v2ex', 'producthunt', 
             'ithome', 'solidot', 'juejin', 'thehackernews', 'freebuf', 
@@ -112,7 +132,6 @@ async function main() {
         }
 
         const md = generateMarkdown(data);
-        
         const date = new Date().toISOString().split('T')[0];
         const archiveDir = path.join(__dirname, '../archives');
         const archiveFile = path.join(archiveDir, `daily_hot_${date}.md`);
@@ -189,19 +208,12 @@ function formatList(items, showDesc = false) {
     if (!items || items.length === 0) return '(暂无数据)';
     return items.map((item, index) => {
         let line = `${index + 1}. [${item.title}](${item.link})`;
-        
-        // Add Desc
         if (showDesc && item.desc) {
             line += ` - ${item.desc}`;
         }
-        
-        // Add AI Comment (The "Fun" Part)
         if (item.comment) {
-            // Check if line is too long, maybe break line?
-            // For now, append with a separator
             line += `  \n   > ${item.comment}`; 
         }
-        
         return line;
     }).join('\n');
 }
