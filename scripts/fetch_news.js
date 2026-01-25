@@ -21,7 +21,10 @@ async function fetchHN() {
 async function fetchV2EX() {
     try {
         const { data } = await axios.get('https://www.v2ex.com/api/topics/hot.json', { headers });
-        return data.slice(0, 20).map(t => ({ title: t.title, link: t.url }));
+        return data.slice(0, 20).map(t => ({ 
+            title: t.title, 
+            link: `https://www.v2ex.com/t/${t.id}` 
+        }));
     } catch (e) { return []; }
 }
 
@@ -94,7 +97,10 @@ async function fetchITHome() {
         $('#rank ul li a').each((i, el) => {
             if (items.length >= 20) return;
             const title = $(el).text().trim();
-            const link = $(el).attr('href');
+            let link = $(el).attr('href');
+            if (link && !link.startsWith('http')) {
+                link = `https://www.ithome.com${link}`;
+            }
             if (title && link) items.push({ title, link });
         });
         return items;
@@ -108,9 +114,12 @@ async function fetchSolidot() {
         const items = [];
         $('.block_m').each((i, el) => {
             if (items.length >= 20) return;
-            const title = $(el).find('.bg_htit h2 a').text().trim();
-            let link = $(el).find('.bg_htit h2 a').attr('href');
-            if (link && !link.startsWith('http')) link = `https://www.solidot.org${link}`;
+            const $block = $(el);
+            const title = $block.find('.bg_htit h2 a').text().trim();
+            let link = $block.find('a[href^="/story"]').first().attr('href');
+            if (link && !link.startsWith('http')) {
+                link = `https://www.solidot.org${link}`;
+            }
             if (title && link) items.push({ title, link });
         });
         return items;
@@ -151,11 +160,20 @@ async function fetchTheHackerNews() {
 
 async function fetchFreeBuf() {
     try {
-        const feed = await parser.parseURL('https://www.freebuf.com/feed');
-        return feed.items.slice(0, 20).map(item => ({
-            title: item.title,
-            link: item.link
-        }));
+        const { data } = await axios.get('https://www.freebuf.com/articles', { headers });
+        const $ = cheerio.load(data);
+        const items = [];
+        $('.news-info').each((i, el) => {
+            if (items.length >= 20) return;
+            const $item = $(el);
+            const title = $item.find('a.title').text().trim();
+            let link = $item.find('a.title').attr('href');
+            if (link && !link.startsWith('http')) {
+                link = `https://www.freebuf.com${link}`;
+            }
+            if (title && link) items.push({ title, link });
+        });
+        return items;
     } catch (e) {
         console.error('FreeBuf Error:', e.message);
         return [];

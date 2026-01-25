@@ -7,7 +7,11 @@ const ai = new GoogleGenAI({
 });
 
 const modelPool = {
-  models: ['gemini-2.5-flash', 'gemini-3-flash'],
+  models: [
+    "gemini-2.5-flash",
+    "gemini-3-flash-preview",
+    "gemini-2.5-flash-lite",
+  ],
   currentIndex: 0,
   getCurrent() {
     return this.models[this.currentIndex];
@@ -18,7 +22,7 @@ const modelPool = {
   },
   reset() {
     this.currentIndex = 0;
-  }
+  },
 };
 
 // Helper: Chunk array
@@ -30,8 +34,100 @@ function chunkArray(array, size) {
   return chunked;
 }
 
-// Helper: Delay
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+function sanitizeString(str) {
+  if (str === null || str === undefined) return "";
+
+  let sanitized = String(str);
+
+  sanitized = sanitized
+    .split("")
+    .filter((char) => {
+      const code = char.charCodeAt(0);
+      return code >= 0x20 || code === 0x09 || code === 0x0a || code === 0x0d;
+    })
+    .join("")
+    .normalize("NFC")
+    .trim()
+    .slice(0, 5000);
+
+  return sanitized;
+}
+
+function sanitizeForJSON(obj) {
+  if (obj === null || obj === undefined) return null;
+
+  if (Array.isArray(obj)) {
+    return obj.map((item) => sanitizeForJSON(item));
+  }
+
+  if (typeof obj === "object") {
+    const sanitized = {};
+    for (const [key, value] of Object.entries(obj)) {
+      if (
+        typeof value === "function" ||
+        typeof value === "symbol" ||
+        value === undefined
+      ) {
+        continue;
+      }
+
+      if (typeof value === "number" && !Number.isFinite(value)) {
+        sanitized[key] = null;
+        continue;
+      }
+
+      if (typeof value === "string") {
+        sanitized[key] = sanitizeString(value);
+      } else if (typeof value === "object") {
+        sanitized[key] = sanitizeForJSON(value);
+      } else {
+        sanitized[key] = value;
+      }
+    }
+    return sanitized;
+  }
+
+  if (typeof obj === "string") {
+    return sanitizeString(obj);
+  }
+
+  if (typeof obj === "number" && !Number.isFinite(obj)) {
+    return null;
+  }
+
+  return obj;
+}
+
+function safeJSONParse(jsonString, fallback = null) {
+  try {
+    const trimmed = jsonString.trim();
+    if (!trimmed) {
+      console.warn("Empty JSON string provided");
+      return fallback;
+    }
+
+    return JSON.parse(trimmed);
+  } catch (error) {
+    console.error("JSON parse error:", error.message);
+    console.error(
+      "Problematic JSON (first 200 chars):",
+      jsonString.slice(0, 200),
+    );
+    return fallback;
+  }
+}
+
+function safeJSONStringify(obj, fallback = "{}") {
+  try {
+    const sanitized = sanitizeForJSON(obj);
+    return JSON.stringify(sanitized);
+  } catch (error) {
+    console.error("JSON stringify error:", error.message);
+    return fallback;
+  }
+}
 
 // Helper: Retry wrapper with Exponential Backoff
 async function generateWithRetry(prompt, retries = 5) {
@@ -42,10 +138,10 @@ async function generateWithRetry(prompt, retries = 5) {
 
   while (attempt < retries) {
     const currentModel = modelPool.getCurrent();
-    
+
     try {
       console.log(`🤖 Using model: ${currentModel}`);
-      
+
       return await ai.models.generateContent({
         model: currentModel,
         contents: prompt,
@@ -58,10 +154,12 @@ async function generateWithRetry(prompt, retries = 5) {
         if (modelSwitchCount < maxModelSwitches - 1) {
           const nextModel = modelPool.switchNext();
           modelSwitchCount++;
-          console.warn(`⚠️ Rate limited on ${currentModel}. Switching to ${nextModel}...`);
+          console.warn(
+            `⚠️ Rate limited on ${currentModel}. Switching to ${nextModel}...`,
+          );
           continue;
         }
-        
+
         attempt++;
         if (attempt >= retries) throw error;
 
@@ -89,8 +187,8 @@ async function processCategory(items, categoryName) {
   for (const chunk of chunks) {
     try {
       const inputData = chunk.map((item) => ({
-        title: item.title,
-        desc: item.desc || "",
+        title: sanitizeString(item.title || ""),
+        desc: sanitizeString(item.desc || ""),
       }));
 
       const prompt = `You are a witty and professional tech news commentator.
@@ -104,12 +202,11 @@ async function processCategory(items, categoryName) {
             Return JSON Array of objects with keys: "title", "desc", "comment".
 
             Input:
-            ${JSON.stringify(inputData)}`;
+            ${safeJSONStringify(inputData)}`;
 
-      // Use the retry wrapper
       const result = await generateWithRetry(prompt);
       const responseText = result.text;
-      let chunkResult = JSON.parse(responseText);
+      let chunkResult = safeJSONParse(responseText, []);
 
       if (!Array.isArray(chunkResult)) {
         if (chunkResult.data) chunkResult = chunkResult.data;
@@ -148,7 +245,7 @@ async function processCategory(items, categoryName) {
 async function main() {
   try {
     const rawData = fs.readFileSync("news_data.json", "utf8");
-    const data = JSON.parse(rawData);
+    const data = safeJSONParse(rawData, {});
 
     const categories = [
       "hackernews",
@@ -173,16 +270,16 @@ async function main() {
 
     const md = generateMarkdown(data);
     const date = new Date().toISOString().split("T")[0];
-    const archiveDir = path.join(__dirname, "../archives");
-    const archiveFile = path.join(archiveDir, `daily_hot_${date}.md`);
     const readmeFile = path.join(__dirname, "../README.md");
+    const docsArchiveDir = path.join(__dirname, "../docs/archives");
+    const docsArchiveFile = path.join(docsArchiveDir, `daily_hot_${date}.md`);
 
-    if (!fs.existsSync(archiveDir)) {
-      fs.mkdirSync(archiveDir, { recursive: true });
+    if (!fs.existsSync(docsArchiveDir)) {
+      fs.mkdirSync(docsArchiveDir, { recursive: true });
     }
 
-    fs.writeFileSync(archiveFile, md);
-    console.log(`Generated: ${archiveFile}`);
+    fs.writeFileSync(docsArchiveFile, md);
+    console.log(`Generated: ${docsArchiveFile}`);
 
     updateReadme(readmeFile, date);
   } catch (error) {
@@ -262,17 +359,15 @@ function formatList(items, showDesc = false) {
 function updateReadme(readmeFile, date) {
   try {
     let readmeContent = fs.readFileSync(readmeFile, "utf8");
-    const linkEntry = `- [${date}](./archives/daily_hot_${date}.md)`;
+    const linkEntry = `- [${date}](./docs/archives/daily_hot_${date}.md)`;
 
-    if (readmeContent.includes("## 📅 Archives")) {
-      if (!readmeContent.includes(linkEntry)) {
-        readmeContent = readmeContent.replace(
-          "## 📅 Archives (历史归档)\n\n",
-          `## 📅 Archives (历史归档)\n\n${linkEntry}\n`,
-        );
-        fs.writeFileSync(readmeFile, readmeContent);
-        console.log("Updated README.md");
-      }
+    if (readmeContent.includes("## 📜 Latest Archive")) {
+      readmeContent = readmeContent.replace(
+        /Latest news file: `.*`/,
+        `Latest news file: \`docs/archives/daily_hot_${date}.md\``,
+      );
+      fs.writeFileSync(readmeFile, readmeContent);
+      console.log("Updated README.md");
     }
   } catch (e) {
     console.error("Failed to update README:", e);

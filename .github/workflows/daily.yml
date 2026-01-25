@@ -8,6 +8,8 @@ on:
 
 permissions:
   contents: write
+  pages: write
+  id-token: write
 
 jobs:
   build:
@@ -40,11 +42,22 @@ jobs:
         git config --global user.name 'github-actions[bot]'
         git config --global user.email 'github-actions[bot]@users.noreply.github.com'
         
-        # Check if there are changes
         if [[ -n $(git status -s) ]]; then
-          git add archives/ README.md
+          git add README.md docs/archives/
           git commit -m "chore: update daily news $(date +'%Y-%m-%d')"
           git push
         else
           echo "No changes to commit"
         fi
+
+    - name: Setup Pages
+      uses: actions/configure-pages@v4
+
+    - name: Upload artifact
+      uses: actions/upload-pages-artifact@v3
+      with:
+        path: './docs'
+
+    - name: Deploy to GitHub Pages
+      id: deployment
+      uses: actions/deploy-pages@v4
