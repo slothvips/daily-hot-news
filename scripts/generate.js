@@ -1,162 +1,201 @@
-const fs = require('node:fs');
-const path = require('node:path');
-const { GoogleGenerativeAI } = require("@google/generative-ai");
+const fs = require("node:fs");
+const path = require("node:path");
+const { GoogleGenAI } = require("@google/genai");
 
-// Initialize Gemini
-const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-// Flash is faster and cheaper, good for batching.
-const model = genAI.getGenerativeModel({ 
-    model: "gemini-3-flash", 
-    generationConfig: { responseMimeType: "application/json" }
+const ai = new GoogleGenAI({
+  apiKey: process.env.GEMINI_API_KEY,
 });
+
+const modelPool = {
+  models: ['gemini-2.5-flash', 'gemini-3-flash'],
+  currentIndex: 0,
+  getCurrent() {
+    return this.models[this.currentIndex];
+  },
+  switchNext() {
+    this.currentIndex = (this.currentIndex + 1) % this.models.length;
+    return this.getCurrent();
+  },
+  reset() {
+    this.currentIndex = 0;
+  }
+};
 
 // Helper: Chunk array
 function chunkArray(array, size) {
-    const chunked = [];
-    for (let i = 0; i < array.length; i += size) {
-        chunked.push(array.slice(i, i + size));
-    }
-    return chunked;
+  const chunked = [];
+  for (let i = 0; i < array.length; i += size) {
+    chunked.push(array.slice(i, i + size));
+  }
+  return chunked;
 }
 
 // Helper: Delay
-const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
+const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 // Helper: Retry wrapper with Exponential Backoff
 async function generateWithRetry(prompt, retries = 5) {
-    let attempt = 0;
-    let baseDelay = 10000; // Start with 10 seconds delay for 429
+  let attempt = 0;
+  const baseDelay = 10000;
+  let modelSwitchCount = 0;
+  const maxModelSwitches = modelPool.models.length;
 
-    while (attempt < retries) {
-        try {
-            return await model.generateContent(prompt);
-        } catch (error) {
-            // Check for Rate Limit (429) or Overloaded (503)
-            if (error.message.includes('429') || error.message.includes('503')) {
-                attempt++;
-                if (attempt >= retries) throw error;
-                
-                const waitTime = baseDelay * Math.pow(2, attempt - 1); // 10s, 20s, 40s...
-                console.warn(`⚠️ Rate limited (429/503). Retrying in ${waitTime/1000}s (Attempt ${attempt}/${retries})...`);
-                await delay(waitTime);
-            } else {
-                throw error; // Non-retriable error
-            }
+  while (attempt < retries) {
+    const currentModel = modelPool.getCurrent();
+    
+    try {
+      console.log(`🤖 Using model: ${currentModel}`);
+      
+      return await ai.models.generateContent({
+        model: currentModel,
+        contents: prompt,
+        config: {
+          responseMimeType: "application/json",
+        },
+      });
+    } catch (error) {
+      if (error.message.includes("429") || error.message.includes("503")) {
+        if (modelSwitchCount < maxModelSwitches - 1) {
+          const nextModel = modelPool.switchNext();
+          modelSwitchCount++;
+          console.warn(`⚠️ Rate limited on ${currentModel}. Switching to ${nextModel}...`);
+          continue;
         }
+        
+        attempt++;
+        if (attempt >= retries) throw error;
+
+        const waitTime = baseDelay * 2 ** (attempt - 1);
+        console.warn(
+          `⚠️ All models rate limited. Retrying in ${waitTime / 1000}s (Attempt ${attempt}/${retries})...`,
+        );
+        await delay(waitTime);
+        modelSwitchCount = 0;
+        modelPool.reset();
+      } else {
+        throw error;
+      }
     }
+  }
 }
 
-// Process a single category in batches
 async function processCategory(items, categoryName) {
-    if (!items || items.length === 0) return [];
-    
-    console.log(`Processing ${categoryName} (${items.length} items)...`);
-    const chunks = chunkArray(items, 10); // Batch size 10
-    let processedItems = [];
+  if (!items || items.length === 0) return [];
 
-    for (const chunk of chunks) {
-        try {
-            const inputData = chunk.map(item => ({
-                title: item.title,
-                desc: item.desc || ""
-            }));
+  console.log(`Processing ${categoryName} (${items.length} items)...`);
+  const chunks = chunkArray(items, 10); // Batch size 10
+  let processedItems = [];
 
-            const prompt = `You are a witty and professional tech news commentator.
+  for (const chunk of chunks) {
+    try {
+      const inputData = chunk.map((item) => ({
+        title: item.title,
+        desc: item.desc || "",
+      }));
+
+      const prompt = `You are a witty and professional tech news commentator.
             Task:
             1. Translate "title" to Chinese (Simplified).
             2. Translate "desc" to Chinese (Simplified) if it exists.
             3. Generate a "comment": A very short, fun, witty, sarcastic, or insightful remark about this news (max 15 words) in Chinese. Add an appropriate emoji at the start.
-            
+
             Context: This is for the "${categoryName}" section of a daily tech report.
-            
+
             Return JSON Array of objects with keys: "title", "desc", "comment".
-            
+
             Input:
             ${JSON.stringify(inputData)}`;
 
-            // Use the retry wrapper
-            const result = await generateWithRetry(prompt);
-            const responseText = result.response.text();
-            let chunkResult = JSON.parse(responseText);
-            
-            if (!Array.isArray(chunkResult)) {
-                if (chunkResult.data) chunkResult = chunkResult.data;
-                else if (chunkResult.items) chunkResult = chunkResult.items;
-                else chunkResult = Object.values(chunkResult)[0];
-            }
+      // Use the retry wrapper
+      const result = await generateWithRetry(prompt);
+      const responseText = result.text;
+      let chunkResult = JSON.parse(responseText);
 
-            if (Array.isArray(chunkResult)) {
-                const mergedChunk = chunk.map((original, index) => {
-                    if (chunkResult[index]) {
-                        return {
-                            ...original,
-                            title: chunkResult[index].title || original.title,
-                            desc: chunkResult[index].desc || original.desc,
-                            comment: chunkResult[index].comment || ""
-                        };
-                    }
-                    return original;
-                });
-                processedItems = processedItems.concat(mergedChunk);
-            } else {
-                console.warn(`Batch failed for ${categoryName}, keeping original.`);
-                processedItems = processedItems.concat(chunk);
-            }
-            
-            // Standard delay between successful chunks to be nice
-            await delay(5000); // 5s delay between chunks
+      if (!Array.isArray(chunkResult)) {
+        if (chunkResult.data) chunkResult = chunkResult.data;
+        else if (chunkResult.items) chunkResult = chunkResult.items;
+        else chunkResult = Object.values(chunkResult)[0];
+      }
 
-        } catch (e) {
-            console.error(`Error processing chunk for ${categoryName}:`, e.message);
-            processedItems = processedItems.concat(chunk);
-        }
+      if (Array.isArray(chunkResult)) {
+        const mergedChunk = chunk.map((original, index) => {
+          if (chunkResult[index]) {
+            return {
+              ...original,
+              title: chunkResult[index].title || original.title,
+              desc: chunkResult[index].desc || original.desc,
+              comment: chunkResult[index].comment || "",
+            };
+          }
+          return original;
+        });
+        processedItems = processedItems.concat(mergedChunk);
+      } else {
+        console.warn(`Batch failed for ${categoryName}, keeping original.`);
+        processedItems = processedItems.concat(chunk);
+      }
+
+      // Standard delay between successful chunks to be nice
+      await delay(5000); // 5s delay between chunks
+    } catch (e) {
+      console.error(`Error processing chunk for ${categoryName}:`, e.message);
+      processedItems = processedItems.concat(chunk);
     }
-    return processedItems;
+  }
+  return processedItems;
 }
 
 async function main() {
-    try {
-        const rawData = fs.readFileSync('news_data.json', 'utf8');
-        const data = JSON.parse(rawData);
-        
-        const categories = [
-            'hackernews', 'github', 'huggingface', 'v2ex', 'producthunt', 
-            'ithome', 'solidot', 'juejin', 'thehackernews', 'freebuf', 
-            'unnews', 'crypto'
-        ];
+  try {
+    const rawData = fs.readFileSync("news_data.json", "utf8");
+    const data = JSON.parse(rawData);
 
-        for (const cat of categories) {
-            if (data[cat]) {
-                data[cat] = await processCategory(data[cat], cat);
-            }
-        }
+    const categories = [
+      "hackernews",
+      "github",
+      "huggingface",
+      "v2ex",
+      "producthunt",
+      "ithome",
+      "solidot",
+      "juejin",
+      "thehackernews",
+      "freebuf",
+      "unnews",
+      "crypto",
+    ];
 
-        const md = generateMarkdown(data);
-        const date = new Date().toISOString().split('T')[0];
-        const archiveDir = path.join(__dirname, '../archives');
-        const archiveFile = path.join(archiveDir, `daily_hot_${date}.md`);
-        const readmeFile = path.join(__dirname, '../README.md');
-
-        if (!fs.existsSync(archiveDir)) {
-            fs.mkdirSync(archiveDir, { recursive: true });
-        }
-
-        fs.writeFileSync(archiveFile, md);
-        console.log(`Generated: ${archiveFile}`);
-
-        updateReadme(readmeFile, date);
-
-    } catch (error) {
-        console.error('Error during generation:', error);
-        process.exit(1);
+    for (const cat of categories) {
+      if (data[cat]) {
+        data[cat] = await processCategory(data[cat], cat);
+      }
     }
+
+    const md = generateMarkdown(data);
+    const date = new Date().toISOString().split("T")[0];
+    const archiveDir = path.join(__dirname, "../archives");
+    const archiveFile = path.join(archiveDir, `daily_hot_${date}.md`);
+    const readmeFile = path.join(__dirname, "../README.md");
+
+    if (!fs.existsSync(archiveDir)) {
+      fs.mkdirSync(archiveDir, { recursive: true });
+    }
+
+    fs.writeFileSync(archiveFile, md);
+    console.log(`Generated: ${archiveFile}`);
+
+    updateReadme(readmeFile, date);
+  } catch (error) {
+    console.error("Error during generation:", error);
+    process.exit(1);
+  }
 }
 
 function generateMarkdown(data) {
-    const date = new Date().toISOString().split('T')[0];
-    const timestamp = new Date().toISOString();
-    
-    return `# 每日热门资讯 (Daily Hot News)
+  const date = new Date().toISOString().split("T")[0];
+  const timestamp = new Date().toISOString();
+
+  return `# 每日热门资讯 (Daily Hot News)
 
 日期: ${date}
 
@@ -205,37 +244,39 @@ ${formatList(data.crypto)}
 }
 
 function formatList(items, showDesc = false) {
-    if (!items || items.length === 0) return '(暂无数据)';
-    return items.map((item, index) => {
-        let line = `${index + 1}. [${item.title}](${item.link})`;
-        if (showDesc && item.desc) {
-            line += ` - ${item.desc}`;
-        }
-        if (item.comment) {
-            line += `  \n   > ${item.comment}`; 
-        }
-        return line;
-    }).join('\n');
+  if (!items || items.length === 0) return "(暂无数据)";
+  return items
+    .map((item, index) => {
+      let line = `${index + 1}. [${item.title}](${item.link})`;
+      if (showDesc && item.desc) {
+        line += ` - ${item.desc}`;
+      }
+      if (item.comment) {
+        line += `  \n   > ${item.comment}`;
+      }
+      return line;
+    })
+    .join("\n");
 }
 
 function updateReadme(readmeFile, date) {
-    try {
-        let readmeContent = fs.readFileSync(readmeFile, 'utf8');
-        const linkEntry = `- [${date}](./archives/daily_hot_${date}.md)`;
-        
-        if (readmeContent.includes('## 📅 Archives')) {
-            if (!readmeContent.includes(linkEntry)) {
-                readmeContent = readmeContent.replace(
-                    '## 📅 Archives (历史归档)\n\n', 
-                    `## 📅 Archives (历史归档)\n\n${linkEntry}\n`
-                );
-                fs.writeFileSync(readmeFile, readmeContent);
-                console.log('Updated README.md');
-            }
-        }
-    } catch (e) {
-        console.error('Failed to update README:', e);
+  try {
+    let readmeContent = fs.readFileSync(readmeFile, "utf8");
+    const linkEntry = `- [${date}](./archives/daily_hot_${date}.md)`;
+
+    if (readmeContent.includes("## 📅 Archives")) {
+      if (!readmeContent.includes(linkEntry)) {
+        readmeContent = readmeContent.replace(
+          "## 📅 Archives (历史归档)\n\n",
+          `## 📅 Archives (历史归档)\n\n${linkEntry}\n`,
+        );
+        fs.writeFileSync(readmeFile, readmeContent);
+        console.log("Updated README.md");
+      }
     }
+  } catch (e) {
+    console.error("Failed to update README:", e);
+  }
 }
 
 main();
