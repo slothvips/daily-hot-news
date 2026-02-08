@@ -187,7 +187,6 @@ function safeJSONParse(jsonString, fallback = null) {
     }
 
     // Advanced Extraction: Count brackets to find the first complete JSON array
-    // This handles cases where text follows the JSON, e.g. "[...] hope this helps"
     const firstBracket = cleanJson.indexOf('[');
     if (firstBracket !== -1) {
         let bracketCount = 0;
@@ -198,25 +197,13 @@ function safeJSONParse(jsonString, fallback = null) {
         for (let i = firstBracket; i < cleanJson.length; i++) {
             const char = cleanJson[i];
             
-            if (escaped) {
-                escaped = false;
-                continue;
-            }
-            
-            if (char === '\\') {
-                escaped = true;
-                continue;
-            }
-
-            if (char === '"') {
-                insideString = !insideString;
-                continue;
-            }
+            if (escaped) { escaped = false; continue; }
+            if (char === '\\') { escaped = true; continue; }
+            if (char === '"') { insideString = !insideString; continue; }
 
             if (!insideString) {
-                if (char === '[') {
-                    bracketCount++;
-                } else if (char === ']') {
+                if (char === '[') bracketCount++;
+                else if (char === ']') {
                     bracketCount--;
                     if (bracketCount === 0) {
                         lastBracket = i;
@@ -228,6 +215,12 @@ function safeJSONParse(jsonString, fallback = null) {
 
         if (lastBracket !== -1) {
             cleanJson = cleanJson.substring(firstBracket, lastBracket + 1);
+        } else {
+            // Fallback: simple first/last bracket match if counting fails
+            const simpleLastBracket = cleanJson.lastIndexOf(']');
+            if (simpleLastBracket > firstBracket) {
+                cleanJson = cleanJson.substring(firstBracket, simpleLastBracket + 1);
+            }
         }
     }
     
@@ -423,6 +416,13 @@ async function processCategory(items, categoryName) {
         processedItems = processedItems.concat(chunk);
         await delay(5000);
         continue;
+      }
+      
+      // Log full response for debugging if parsing fails later
+      if (responseText.trim().startsWith('{') || responseText.trim().startsWith('[')) {
+          // Looks like JSON, proceed quietly
+      } else {
+          console.log(`🔍 Raw Response Preview (${categoryName}): ${responseText.slice(0, 200)}...`);
       }
       
       let chunkResult = safeJSONParse(responseText, []);

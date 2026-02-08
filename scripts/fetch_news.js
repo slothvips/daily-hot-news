@@ -160,7 +160,14 @@ async function fetchTheHackerNews() {
 
 async function fetchFreeBuf() {
     try {
-        const feed = await parser.parseURL('https://www.freebuf.com/feed');
+        const response = await axios.get('https://www.freebuf.com/feed', {
+            headers: { 
+                'User-Agent': UA,
+                'Accept': 'application/rss+xml, application/xml, text/xml'
+            },
+            responseType: 'text'
+        });
+        const feed = await parser.parseString(response.data);
         return feed.items.slice(0, 20).map(item => ({
             title: item.title,
             link: item.link
