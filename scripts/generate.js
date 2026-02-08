@@ -185,6 +185,14 @@ function safeJSONParse(jsonString, fallback = null) {
     } else if (cleanJson.startsWith('```')) {
       cleanJson = cleanJson.replace(/^```/, '').replace(/```$/, '');
     }
+
+    // Try to find the first '[' and last ']' to handle chatty responses like "Here is the JSON: [...]"
+    const firstBracket = cleanJson.indexOf('[');
+    const lastBracket = cleanJson.lastIndexOf(']');
+    
+    if (firstBracket !== -1 && lastBracket !== -1 && lastBracket > firstBracket) {
+        cleanJson = cleanJson.substring(firstBracket, lastBracket + 1);
+    }
     
     return JSON.parse(cleanJson);
   } catch (error) {
@@ -366,7 +374,7 @@ async function processCategory(items, categoryName) {
 
             Context: This is for the "${categoryName}" section of a daily tech report.
 
-            Return JSON Array of objects with keys: "title", "desc", "comment".
+            CRITICAL INSTRUCTION: Return ONLY a valid JSON Array. Do NOT include any conversational text, markdown formatting, or explanations. Start with '[' and end with ']'.
 
             Input:
             ${safeJSONStringify(inputData)}`;
