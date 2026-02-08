@@ -195,41 +195,16 @@ function safeJSONParse(jsonString, fallback = null) {
         }
     }
 
-    // Advanced Extraction: Count brackets to find the first complete JSON array
-    const firstBracket = cleanJson.indexOf('[');
-    if (firstBracket !== -1) {
-        let bracketCount = 0;
-        let lastBracket = -1;
-        let insideString = false;
-        let escaped = false;
-
-        for (let i = firstBracket; i < cleanJson.length; i++) {
-            const char = cleanJson[i];
-            
-            if (escaped) { escaped = false; continue; }
-            if (char === '\\') { escaped = true; continue; }
-            if (char === '"') { insideString = !insideString; continue; }
-
-            if (!insideString) {
-                if (char === '[') bracketCount++;
-                else if (char === ']') {
-                    bracketCount--;
-                    if (bracketCount === 0) {
-                        lastBracket = i;
-                        break;
-                    }
-                }
-            }
-        }
-
-        if (lastBracket !== -1) {
+    // Advanced Extraction: Use Regex to find the JSON array
+    const jsonArrayMatch = cleanJson.match(/\[\s*\{[\s\S]*\}\s*\]/);
+    if (jsonArrayMatch) {
+        cleanJson = jsonArrayMatch[0];
+    } else {
+        // Fallback: Try to find first '[' and last ']'
+        const firstBracket = cleanJson.indexOf('[');
+        const lastBracket = cleanJson.lastIndexOf(']');
+        if (firstBracket !== -1 && lastBracket > firstBracket) {
             cleanJson = cleanJson.substring(firstBracket, lastBracket + 1);
-        } else {
-            // Fallback: simple first/last bracket match if counting fails
-            const simpleLastBracket = cleanJson.lastIndexOf(']');
-            if (simpleLastBracket > firstBracket) {
-                cleanJson = cleanJson.substring(firstBracket, simpleLastBracket + 1);
-            }
         }
     }
     
@@ -270,11 +245,13 @@ async function runCloudflare(model, prompt) {
     },
     body: JSON.stringify({
       messages: [
-        { role: "system", content: "You are a helpful assistant that outputs JSON." },
+        { role: "system", content: "You are a helpful assistant that outputs strictly valid JSON array only. No markdown. No conversational text." },
         { role: "user", content: prompt }
       ],
       // Some CF models don't support response_format, but Llama 3 often does.
       // We'll rely on the prompt to enforce JSON.
+      max_tokens: 4096,
+      temperature: 0.1
     })
   });
 
@@ -360,8 +337,8 @@ async function generateWithRetry(prompt, retries = 5) {
       return resultText;
 
     } catch (error) {
-      const isRateLimit = error.status === 429 || error.status === 503 || 
-                          (error.message && (error.message.includes("429") || error.message.includes("503") || error.message.includes("quota")));
+      const isRateLimit = error.status === 429 || error.status === 503 || error.status === 408 ||
+                          (error.message && (error.message.includes("429") || error.message.includes("503") || error.message.includes("408") || error.message.includes("quota") || error.message.includes("timeout")));
       
       if (isRateLimit || error.message.includes("overloaded")) {
         if (modelSwitchCount < maxModelSwitches - 1) {
@@ -395,7 +372,7 @@ async function processCategory(items, categoryName) {
   if (!items || items.length === 0) return [];
 
   console.log(`Processing ${categoryName} (${items.length} items)...`);
-  const chunks = chunkArray(items, 5); // Batch size 5
+  const chunks = chunkArray(items, 3); // Batch size 3
   let processedItems = [];
 
   for (const chunk of chunks) {
@@ -413,7 +390,13 @@ async function processCategory(items, categoryName) {
 
             Context: This is for the "${categoryName}" section of a daily tech report.
 
-            CRITICAL INSTRUCTION: Return ONLY a valid JSON Array. Do NOT include any conversational text, markdown formatting, or explanations. Start with '[' and end with ']'.
+            CRITICAL INSTRUCTION: Return ONLY a valid JSON Array. 
+            - NO markdown code blocks.
+            - NO conversational text.
+            - NO explanations.
+            - Ensure the JSON is complete and not truncated.
+            - Start with '[' and end with ']'.
+            
             Example Output: [{"title":"Title", "desc":"Description", "comment":"emoji Comment"}]
 
             Input:
