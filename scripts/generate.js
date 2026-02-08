@@ -405,6 +405,7 @@ async function processCategory(items, categoryName) {
             Context: This is for the "${categoryName}" section of a daily tech report.
 
             CRITICAL INSTRUCTION: Return ONLY a valid JSON Array. Do NOT include any conversational text, markdown formatting, or explanations. Start with '[' and end with ']'.
+            Example Output: [{"title":"Title", "desc":"Description", "comment":"emoji Comment"}]
 
             Input:
             ${safeJSONStringify(inputData)}`;
