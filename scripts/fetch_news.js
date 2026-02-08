@@ -160,20 +160,11 @@ async function fetchTheHackerNews() {
 
 async function fetchFreeBuf() {
     try {
-        const { data } = await axios.get('https://www.freebuf.com/articles', { headers });
-        const $ = cheerio.load(data);
-        const items = [];
-        $('.news-info').each((i, el) => {
-            if (items.length >= 20) return;
-            const $item = $(el);
-            const title = $item.find('a.title').text().trim();
-            let link = $item.find('a.title').attr('href');
-            if (link && !link.startsWith('http')) {
-                link = `https://www.freebuf.com${link}`;
-            }
-            if (title && link) items.push({ title, link });
-        });
-        return items;
+        const feed = await parser.parseURL('https://www.freebuf.com/feed');
+        return feed.items.slice(0, 20).map(item => ({
+            title: item.title,
+            link: item.link
+        }));
     } catch (e) {
         console.error('FreeBuf Error:', e.message);
         return [];
@@ -182,7 +173,20 @@ async function fetchFreeBuf() {
 
 async function fetchUNNews() {
     try {
-        const feed = await parser.parseURL('https://news.un.org/feed/subscribe/en/news/all/rss.xml');
+        const response = await axios.get('https://news.un.org/feed/subscribe/en/news/all/rss.xml', {
+            headers: { 'User-Agent': UA },
+            responseType: 'text' // Force text to handle BOM manually
+        });
+        
+        let xmlData = response.data;
+        // Strip BOM if present
+        if (xmlData.charCodeAt(0) === 0xFEFF) {
+            xmlData = xmlData.slice(1);
+        }
+        // Basic whitespace cleanup
+        xmlData = xmlData.trim();
+
+        const feed = await parser.parseString(xmlData);
         return feed.items.slice(0, 20).map(item => ({
             title: item.title,
             link: item.link

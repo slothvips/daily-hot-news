@@ -186,12 +186,49 @@ function safeJSONParse(jsonString, fallback = null) {
       cleanJson = cleanJson.replace(/^```/, '').replace(/```$/, '');
     }
 
-    // Try to find the first '[' and last ']' to handle chatty responses like "Here is the JSON: [...]"
+    // Advanced Extraction: Count brackets to find the first complete JSON array
+    // This handles cases where text follows the JSON, e.g. "[...] hope this helps"
     const firstBracket = cleanJson.indexOf('[');
-    const lastBracket = cleanJson.lastIndexOf(']');
-    
-    if (firstBracket !== -1 && lastBracket !== -1 && lastBracket > firstBracket) {
-        cleanJson = cleanJson.substring(firstBracket, lastBracket + 1);
+    if (firstBracket !== -1) {
+        let bracketCount = 0;
+        let lastBracket = -1;
+        let insideString = false;
+        let escaped = false;
+
+        for (let i = firstBracket; i < cleanJson.length; i++) {
+            const char = cleanJson[i];
+            
+            if (escaped) {
+                escaped = false;
+                continue;
+            }
+            
+            if (char === '\\') {
+                escaped = true;
+                continue;
+            }
+
+            if (char === '"') {
+                insideString = !insideString;
+                continue;
+            }
+
+            if (!insideString) {
+                if (char === '[') {
+                    bracketCount++;
+                } else if (char === ']') {
+                    bracketCount--;
+                    if (bracketCount === 0) {
+                        lastBracket = i;
+                        break;
+                    }
+                }
+            }
+        }
+
+        if (lastBracket !== -1) {
+            cleanJson = cleanJson.substring(firstBracket, lastBracket + 1);
+        }
     }
     
     return JSON.parse(cleanJson);
