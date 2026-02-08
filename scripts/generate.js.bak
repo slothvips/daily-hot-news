@@ -1,96 +1,25 @@
 const fs = require("node:fs");
 const path = require("node:path");
 const { GoogleGenAI } = require("@google/genai");
-const OpenAI = require("openai");
 
-// Configuration: API Provider
-// Options: 'gemini' (default) | 'openai' | 'deepseek' | 'siliconflow' | 'cloudflare' | 'pollinations'
-const API_PROVIDER = process.env.API_PROVIDER || 'gemini';
-const API_KEY = process.env.API_KEY || process.env.GEMINI_API_KEY;
-const API_BASE_URL = process.env.API_BASE_URL; // Optional for OpenAI-compatible
-const API_MODEL = process.env.API_MODEL; // Optional override
-
-// Cloudflare Specific Config
-const CLOUDFLARE_ACCOUNT_ID = process.env.CLOUDFLARE_ACCOUNT_ID;
-const CLOUDFLARE_API_TOKEN = process.env.CLOUDFLARE_API_TOKEN || API_KEY;
-
-// Initialize Clients
-let aiClient;
-const currentProvider = API_PROVIDER;
-
-if (API_PROVIDER === 'gemini') {
-  if (API_KEY) aiClient = new GoogleGenAI({ apiKey: API_KEY });
-} else if (['openai', 'deepseek', 'siliconflow', 'groq'].includes(API_PROVIDER)) {
-  // Generic OpenAI-compatible client
-  let baseURL = API_BASE_URL;
-  if (!baseURL) {
-    if (API_PROVIDER === 'deepseek') baseURL = 'https://api.deepseek.com';
-    if (API_PROVIDER === 'siliconflow') baseURL = 'https://api.siliconflow.cn/v1';
-    if (API_PROVIDER === 'groq') baseURL = 'https://api.groq.com/openai/v1';
-  }
-  
-  if (API_KEY) {
-    aiClient = new OpenAI({
-      apiKey: API_KEY,
-      baseURL: baseURL,
-    });
-  }
-}
+const ai = new GoogleGenAI({
+  apiKey: process.env.GEMINI_API_KEY,
+});
 
 const modelPool = {
-  // Gemini Models
-  gemini: [
-    "gemini-2.0-flash",
+  models: [
     "gemini-2.5-flash",
-    "gemini-1.5-flash",
+    "gemini-3-flash-preview",
+    "gemini-2.5-flash-lite",
   ],
-  // DeepSeek Models
-  deepseek: [
-    "deepseek-chat",
-  ],
-  // SiliconFlow / OpenAI Compatible Models
-  openai: [
-    "gpt-4o-mini",
-    "gpt-3.5-turbo",
-  ],
-  siliconflow: [
-    "deepseek-ai/DeepSeek-V3",
-    "deepseek-ai/DeepSeek-R1",
-  ],
-  groq: [
-    "llama3-70b-8192",
-    "mixtral-8x7b-32768",
-    "gemma-7b-it",
-  ],
-  cloudflare: [
-    "@cf/meta/llama-3-8b-instruct",
-    "@cf/meta/llama-3.1-8b-instruct",
-    "@cf/google/gemma-7b-it-lora",
-  ],
-  pollinations: [
-    "openai", // Pollinations maps this to a free model usually
-    "mistral",
-    "llama",
-  ],
-  
   currentIndex: 0,
-  
-  getModels() {
-    if (API_MODEL) return [API_MODEL];
-    return this[currentProvider] || this.gemini;
-  },
-
   getCurrent() {
-    const models = this.getModels();
-    return models[this.currentIndex % models.length];
+    return this.models[this.currentIndex];
   },
-
   switchNext() {
-    const models = this.getModels();
-    this.currentIndex = (this.currentIndex + 1) % models.length;
+    this.currentIndex = (this.currentIndex + 1) % this.models.length;
     return this.getCurrent();
   },
-
   reset() {
     this.currentIndex = 0;
   },
@@ -178,18 +107,19 @@ function safeJSONParse(jsonString, fallback = null) {
       return fallback;
     }
     
-    // Clean up markdown code blocks if present
-    let cleanJson = jsonString.trim();
-    if (cleanJson.startsWith('```json')) {
-      cleanJson = cleanJson.replace(/^```json/, '').replace(/```$/, '');
-    } else if (cleanJson.startsWith('```')) {
-      cleanJson = cleanJson.replace(/^```/, '').replace(/```$/, '');
+    const trimmed = jsonString.trim();
+    if (!trimmed) {
+      console.warn("Empty JSON string provided");
+      return fallback;
     }
-    
-    return JSON.parse(cleanJson);
+
+    return JSON.parse(trimmed);
   } catch (error) {
     console.error("JSON parse error:", error.message);
-    // console.error("Problematic JSON:", jsonString.slice(0, 100) + "...");
+    console.error(
+      "Problematic JSON (first 200 chars):",
+      jsonString ? jsonString.slice(0, 200) : 'undefined',
+    );
     return fallback;
   }
 }
@@ -204,119 +134,28 @@ function safeJSONStringify(obj, fallback = "{}") {
   }
 }
 
-// Helper: Run Cloudflare Workers AI
-async function runCloudflare(model, prompt) {
-  const accountId = CLOUDFLARE_ACCOUNT_ID;
-  const apiToken = CLOUDFLARE_API_TOKEN;
-
-  if (!accountId || !apiToken) {
-    throw new Error("Missing CLOUDFLARE_ACCOUNT_ID or CLOUDFLARE_API_TOKEN");
-  }
-
-  const url = `https://api.cloudflare.com/client/v4/accounts/${accountId}/ai/run/${model}`;
-  
-  const response = await fetch(url, {
-    method: "POST",
-    headers: {
-      "Authorization": `Bearer ${apiToken}`,
-      "Content-Type": "application/json"
-    },
-    body: JSON.stringify({
-      messages: [
-        { role: "system", content: "You are a helpful assistant that outputs JSON." },
-        { role: "user", content: prompt }
-      ],
-      // Some CF models don't support response_format, but Llama 3 often does.
-      // We'll rely on the prompt to enforce JSON.
-    })
-  });
-
-  if (!response.ok) {
-    const text = await response.text();
-    throw new Error(`Cloudflare API Error: ${response.status} ${text}`);
-  }
-
-  const result = await response.json();
-  return result.result.response;
-}
-
-// Helper: Run Pollinations.ai (Free, No Key)
-async function runPollinations(model, prompt) {
-  // Pollinations uses GET/POST. POST is better for long prompts.
-  // URL: https://text.pollinations.ai/
-  
-  const response = await fetch('https://text.pollinations.ai/', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
-      messages: [
-        { role: 'system', content: 'You are a helpful assistant. Output JSON.' },
-        { role: 'user', content: prompt }
-      ],
-      model: model, // 'openai', 'mistral', 'llama'
-      jsonMode: true // Pollinations specific flag for JSON
-    }),
-  });
-
-  if (!response.ok) {
-    const text = await response.text();
-    throw new Error(`Pollinations API Error: ${response.status} ${text}`);
-  }
-
-  // Pollinations returns raw text usually
-  return await response.text();
-}
-
 // Helper: Retry wrapper with Exponential Backoff
 async function generateWithRetry(prompt, retries = 5) {
   let attempt = 0;
   const baseDelay = 10000;
   let modelSwitchCount = 0;
-  const models = modelPool.getModels();
-  const maxModelSwitches = models.length;
+  const maxModelSwitches = modelPool.models.length;
 
   while (attempt < retries) {
     const currentModel = modelPool.getCurrent();
 
     try {
-      console.log(`🤖 Using provider: ${currentProvider}, model: ${currentModel}`);
+      console.log(`🤖 Using model: ${currentModel}`);
 
-      let resultText;
-
-      if (currentProvider === 'gemini') {
-        if (!aiClient) throw new Error("Gemini Client not initialized (check API Key)");
-        const result = await aiClient.models.generateContent({
-          model: currentModel,
-          contents: prompt,
-          config: {
-            responseMimeType: "application/json",
-          },
-        });
-        resultText = result?.text || result?.response?.text();
-      } else if (currentProvider === 'cloudflare') {
-        resultText = await runCloudflare(currentModel, prompt);
-      } else if (currentProvider === 'pollinations') {
-        resultText = await runPollinations(currentModel, prompt);
-      } else {
-        // OpenAI / DeepSeek / SiliconFlow / Groq
-        if (!aiClient) throw new Error("OpenAI Client not initialized (check API Key)");
-        const completion = await aiClient.chat.completions.create({
-          model: currentModel,
-          messages: [{ role: "user", content: prompt }],
-          response_format: { type: "json_object" }, // Force JSON mode if supported
-        });
-        resultText = completion.choices[0].message.content;
-      }
-      
-      return resultText;
-
+      return await ai.models.generateContent({
+        model: currentModel,
+        contents: prompt,
+        config: {
+          responseMimeType: "application/json",
+        },
+      });
     } catch (error) {
-      const isRateLimit = error.status === 429 || error.status === 503 || 
-                          (error.message && (error.message.includes("429") || error.message.includes("503") || error.message.includes("quota")));
-      
-      if (isRateLimit || error.message.includes("overloaded")) {
+      if (error.message.includes("429") || error.message.includes("503")) {
         if (modelSwitchCount < maxModelSwitches - 1) {
           const nextModel = modelPool.switchNext();
           modelSwitchCount++;
@@ -337,7 +176,6 @@ async function generateWithRetry(prompt, retries = 5) {
         modelSwitchCount = 0;
         modelPool.reset();
       } else {
-        console.error(`❌ API Error (${currentProvider}):`, error.message);
         throw error;
       }
     }
@@ -371,7 +209,8 @@ async function processCategory(items, categoryName) {
             Input:
             ${safeJSONStringify(inputData)}`;
 
-      const responseText = await generateWithRetry(prompt);
+      const result = await generateWithRetry(prompt);
+      const responseText = result?.text || result?.response?.text();
       
       if (!responseText) {
         console.warn(`Empty response for ${categoryName} chunk, keeping original.`);

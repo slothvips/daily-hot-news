@@ -36,6 +36,12 @@ jobs:
       run: npm run generate
       env:
         GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        API_PROVIDER: ${{ vars.API_PROVIDER }}
+        API_KEY: ${{ secrets.API_KEY }}
+        API_BASE_URL: ${{ vars.API_BASE_URL }}
+        API_MODEL: ${{ vars.API_MODEL }}
+        CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
 
     - name: Commit and Push
       run: |

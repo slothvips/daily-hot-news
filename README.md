@@ -122,7 +122,46 @@ daily-hot-news/
 
 Required in GitHub Secrets:
 
-- `GEMINI_API_KEY` - Google Gemini API key for AI translation and commentary
+- `GEMINI_API_KEY` - Google Gemini API key (Default)
+- OR `API_KEY` - OpenAI-compatible API key (if using other providers)
+
+**Optional Configuration (GitHub Variables):**
+
+- `API_PROVIDER`: `gemini` (default), `openai`, `deepseek`, `siliconflow`, `cloudflare`, `pollinations`, `groq`
+- `API_BASE_URL`: Custom API endpoint (e.g. `https://api.deepseek.com`)
+- `API_MODEL`: Custom model name (e.g. `deepseek-chat`)
+- `CLOUDFLARE_ACCOUNT_ID`: Required if using Cloudflare provider
+- `CLOUDFLARE_API_TOKEN`: Required if using Cloudflare provider
+
+### 🆓 Free & Stable Alternatives (Recommended)
+
+If you are facing quota issues with Gemini, try these free/cheap alternatives:
+
+#### 1. Cloudflare Workers AI (10k requests/day FREE)
+- **API_PROVIDER**: `cloudflare`
+- **CLOUDFLARE_ACCOUNT_ID**: Your Cloudflare Account ID
+- **CLOUDFLARE_API_TOKEN**: Your Cloudflare API Token (Template: Workers AI)
+- **API_MODEL** (Optional): `@cf/meta/llama-3-8b-instruct`
+
+#### 2. Pollinations.ai (Completely FREE, No Login)
+- **API_PROVIDER**: `pollinations`
+- **API_MODEL** (Optional): `openai` (Default), `mistral`, `llama`
+- *Note: No API Key required!*
+
+#### 3. SiliconFlow (DeepSeek-V3 Free Tier)
+- **API_PROVIDER**: `siliconflow`
+- **API_KEY**: Your SiliconFlow API Key
+- **API_MODEL**: `deepseek-ai/DeepSeek-V3`
+
+#### 4. Groq (High Speed, Free Beta)
+- **API_PROVIDER**: `groq`
+- **API_KEY**: Your Groq API Key
+- **API_MODEL**: `llama3-70b-8192`
+
+**Example: Using DeepSeek (Free/Cheap & Stable)**
+1. Set Variable `API_PROVIDER` = `deepseek`
+2. Set Secret `API_KEY` = `sk-...` (Your DeepSeek Key)
+
 
 ### AI Agent Instructions
 
