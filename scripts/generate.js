@@ -185,6 +185,15 @@ function safeJSONParse(jsonString, fallback = null) {
     } else if (cleanJson.startsWith('```')) {
       cleanJson = cleanJson.replace(/^```/, '').replace(/```$/, '');
     }
+    
+    // If it looks like a clean JSON object/array already, just try parsing it first
+    if ((cleanJson.startsWith('{') && cleanJson.endsWith('}')) || (cleanJson.startsWith('[') && cleanJson.endsWith(']'))) {
+        try {
+            return JSON.parse(cleanJson);
+        } catch (e) {
+            // If failed, continue to advanced extraction
+        }
+    }
 
     // Advanced Extraction: Count brackets to find the first complete JSON array
     const firstBracket = cleanJson.indexOf('[');
@@ -386,7 +395,7 @@ async function processCategory(items, categoryName) {
   if (!items || items.length === 0) return [];
 
   console.log(`Processing ${categoryName} (${items.length} items)...`);
-  const chunks = chunkArray(items, 10); // Batch size 10
+  const chunks = chunkArray(items, 5); // Batch size 5
   let processedItems = [];
 
   for (const chunk of chunks) {
@@ -454,7 +463,7 @@ async function processCategory(items, categoryName) {
       }
 
       // Standard delay between successful chunks to be nice
-      await delay(5000); // 5s delay between chunks
+      await delay(1000); // 1s delay between chunks
     } catch (e) {
       console.error(`Error processing chunk for ${categoryName}:`, e.message);
       processedItems = processedItems.concat(chunk);
