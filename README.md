@@ -228,7 +228,7 @@ Or use GitHub Actions UI: Actions > Daily News > Run workflow
 
 ## 📜 Latest Archive
 
-Latest news file: `docs/archives/daily_hot_2026-03-08.md`
+Latest news file: `docs/archives/daily_hot_2026-03-09.md`
 
 View online: https://slothvips.github.io/daily-hot-news/
 
